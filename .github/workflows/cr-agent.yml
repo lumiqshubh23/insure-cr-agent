@@ -76,6 +76,10 @@ jobs:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || vars.CR_AGENT_DRY_RUN || 'false' }}
           ONLY_CR: ${{ inputs.only_cr || vars.CR_AGENT_ONLY_CR }}
         run: |
+          # Strip spaces/line breaks accidentally pasted into the secrets
+          export CLAUDE_CODE_OAUTH_TOKEN="$(printf '%s' "${CLAUDE_CODE_OAUTH_TOKEN:-}" | tr -d '[:space:]')"
+          export ANTHROPIC_API_KEY="$(printf '%s' "${ANTHROPIC_API_KEY:-}" | tr -d '[:space:]')"
+          export GH_TOKEN="$(printf '%s' "${GH_TOKEN:-}" | tr -d '[:space:]')"
           if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then unset CLAUDE_CODE_OAUTH_TOKEN; fi
           if [ -z "$ANTHROPIC_API_KEY" ]; then unset ANTHROPIC_API_KEY; fi
           if [ -z "$GH_TOKEN" ]; then echo "::error::Secret CR_AGENT_GH_TOKEN is missing"; exit 1; fi
