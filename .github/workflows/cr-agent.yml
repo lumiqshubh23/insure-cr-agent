@@ -1,0 +1,90 @@
+name: CR Agent (FRD email -> branch per CR)
+
+on:
+  # Instant trigger from Power Automate when the FRD email arrives (see README)
+  repository_dispatch:
+    types: [frd-mail]
+  # Fallback: poll every 30 min, Mon-Sat 08:30-21:00 IST (03:00-15:30 UTC)
+  schedule:
+    - cron: "*/30 3-15 * * 1-6"
+  # Manual run from the Actions tab
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only list CRs and what would happen"
+        type: boolean
+        default: true
+      only_cr:
+        description: "Comma-separated CR ids to process (blank = all)"
+        type: string
+        default: ""
+
+concurrency:
+  group: cr-agent
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a PAT/GitHub App token instead if you want CI to run on the pushed CR branches
+          # (pushes made with the default GITHUB_TOKEN do not trigger other workflows).
+          token: ${{ secrets.CR_AGENT_GH_TOKEN || github.token }}
+
+      # The agent checks out other branches, so run it from a copy outside the work tree
+      - name: Stage agent
+        run: cp -r tools/cr-agent "$RUNNER_TEMP/cr-agent"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y pandoc
+          pip install -r "$RUNNER_TEMP/cr-agent/requirements.txt"
+          npm install -g @anthropic-ai/claude-code
+
+      # TODO: install the INSURE 2.0 toolchain so Claude can build and run tests,
+      # e.g. setup-java + maven cache, or `npm ci` for the frontend.
+
+      - name: Git identity
+        run: |
+          git config user.name  "cr-agent[bot]"
+          git config user.email "cr-agent@users.noreply.github.com"
+
+      - name: Run CR agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MS_TENANT_ID:      ${{ secrets.MS_TENANT_ID }}
+          MS_CLIENT_ID:      ${{ secrets.MS_CLIENT_ID }}
+          MS_CLIENT_SECRET:  ${{ secrets.MS_CLIENT_SECRET }}
+          MAILBOX:           ${{ vars.CR_AGENT_MAILBOX || 'shubham.kumar@lumiq.ai' }}
+          SENDER_FILTER:     ${{ vars.CR_AGENT_SENDERS || 'dinesh.mehta@canarahsbclife.in' }}
+          BASE_BRANCH:       ${{ vars.CR_AGENT_BASE_BRANCH || 'insure/develop' }}
+          TEST_COMMAND:      ${{ vars.CR_AGENT_TEST_COMMAND }}
+          CLAUDE_MODEL:      ${{ vars.CR_AGENT_MODEL }}
+          REPO_DIR:          ${{ github.workspace }}
+          DRY_RUN:           ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          ONLY_CR:           ${{ inputs.only_cr }}
+        run: python "$RUNNER_TEMP/cr-agent/main.py"
+
+      - name: Upload Claude logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cr-agent-logs
+          path: ${{ github.workspace }}/.cr-agent/**/claude-*.log
+          if-no-files-found: ignore
+          retention-days: 14

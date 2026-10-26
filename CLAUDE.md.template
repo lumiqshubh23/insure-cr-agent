@@ -1,0 +1,29 @@
+# INSURE 2.0 - notes for Claude Code
+Rename to CLAUDE.md at the repo root (on insure/develop). The CR agent reads it before every plan and implementation.
+Fill in the brackets; delete what doesn't apply.
+
+## Stack
+- Backend: [e.g. Java 17, Spring Boot 3, Maven multi-module]
+- Frontend: [e.g. Angular 16 / React 18, path: web/]
+- DB: [e.g. Oracle 19c / PostgreSQL; migrations via Flyway in db/migration]
+- Integrations: [e.g. bank partner APIs, payment/SI mandate, OCR, DMS]
+
+## Repo map
+- [module/path]: [what lives there, e.g. proposal journey, rating engine, VVC, insta issuance]
+- Rate tables / product config live in: [path]
+- Bank / channel onboarding config lives in: [path]
+
+## Commands
+- Build: [mvn -q -DskipTests package]
+- Unit tests: [mvn test] / [npm test -- --watch=false]
+- Lint/format: [mvn spotless:apply] / [npm run lint]
+
+## Conventions
+- [Package/naming conventions, DTO/entity patterns, error-code format, logging rules]
+- New validations go in [layer], messages in [file]
+- Feature flags: [how new behaviour is toggled per channel/bank]
+- Never log PII (PAN, Aadhaar, mobile, email, DOB).
+
+## Don'ts
+- Don't change shared configs for other banks/channels unless the FRD says so.
+- Don't edit generated code in [path].
