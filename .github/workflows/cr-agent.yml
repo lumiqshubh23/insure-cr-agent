@@ -44,8 +44,8 @@ jobs:
         with:
           node-version: "20"
 
-      # ---- Toolchains so Claude can build and test both repos. Adjust versions to match your projects.
-      # TODO: add anything else your builds need (private Maven/npm registry credentials, Angular CLI, etc.)
+      # Both product repos are Node.js (Gatsby frontend, TypeScript backend). Change "20" if your team uses another version.
+      # TODO: add a step with private npm registry credentials here if your builds need one.
 
       - name: Install agent tools
         run: |
