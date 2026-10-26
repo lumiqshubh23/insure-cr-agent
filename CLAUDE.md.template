@@ -1,5 +1,7 @@
 # INSURE 2.0 - notes for Claude Code
-Rename to CLAUDE.md at the repo root (on insure/develop). The CR agent reads it before every plan and implementation.
+Copy to CLAUDE.md at the root of EACH product repo (backend and frontend) on insure/develop.
+The CR agent reads both before every plan and implementation. In each, describe only that repo,
+plus how it talks to the other (base URLs, API client, shared DTO naming).
 Fill in the brackets; delete what doesn't apply.
 
 ## Stack

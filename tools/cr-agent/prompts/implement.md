@@ -1,30 +1,34 @@
-You are a senior developer on the INSURE 2.0 codebase (Canara HSBC Life). You are on git branch `$branch`, cut from `$base_branch`.
+You are a senior full-stack developer on INSURE 2.0 (Canara HSBC Life). Your working directory holds the product repos side by side, each already on branch `$branch`:
+$repo_list
 
-Implement change request $cr_id ("$summary") according to its FRD and the plan already written in this branch.
+Implement change request $cr_id ("$summary") according to its FRD and the plan.
 
 ## Inputs
-- Plan (your contract): `$plan_path`
+- Plan (your contract): `$plan_path`. Follow its requirement checklist and API contract exactly.
 - FRD document(s) in markdown (images in *_media folders):
 $frd_files
-- Project conventions: CLAUDE.md (if present). Follow the existing code style, patterns, naming and folder structure exactly.
+- Conventions: `CLAUDE.md` in this folder and in each repo folder. Match each repo's existing style, patterns and structure.
 
 Intake warnings:
 $warnings
 
 ## Rules
-- Implement every REQ in the plan's requirement checklist. Keep changes focused on this CR; do not refactor or reformat unrelated code.
-- Add or update automated tests for the new behaviour, following the existing test setup.
-- Run the build, tests and linters: $test_cmd. Fix failures your change caused. If something fails for reasons unrelated to this CR, leave it and record it.
-- Where the FRD is ambiguous, choose the most conservative option consistent with the existing code, mark it in code with `// TODO($cr_id): <question>` (or the language's comment syntax), and record it.
+- Implement every REQ in the plan, in whichever repo it belongs. Build the backend side of the API contract first, then the frontend against it, so field names, types, validations and messages match exactly.
+- Touch only the repos and files the CR needs. Do not refactor or reformat unrelated code.
+- Add or update automated tests in each repo you change, following that repo's existing test setup.
+- Run the build and tests for each repo you changed:
+$test_cmds
+  Fix failures your change caused. Record unrelated failures instead of fixing them.
+- Where the FRD is ambiguous, choose the most conservative option consistent with the existing code, add a `TODO($cr_id): <question>` comment, and record it.
 - Never put secrets, credentials or real customer data in code, tests or fixtures.
-- Do NOT run git commit, push, checkout, reset or rebase. The pipeline handles git.
+- Do NOT run git commit, push, checkout, switch, reset, rebase or clean. The pipeline handles git.
 
 ## When finished
 Write `$notes_path` with:
-- Status of each REQ (done / partial / not done, with file references).
-- Files changed and why.
-- Assumptions made and open questions for the BA (Dinesh Mehta) or tech lead.
-- Exact commands you ran and the test/build results.
-- Anything a reviewer must check manually (UI, integrations, migrations, configs per environment).
+- Status of each REQ (done / partial / not done) with file references, grouped by repo.
+- Files changed per repo and why; confirm backend and frontend match the API contract.
+- Assumptions and open questions for the BA (Dinesh Mehta) or tech lead.
+- Exact commands run per repo and their results.
+- What a reviewer must check manually (UI, integrations, migrations, per-environment config), and the order to merge the branches (usually backend first).
 
-Finish with a short summary: REQs done vs total, tests passing or failing.
+Finish with a short summary: REQs done vs total, repos changed, tests passing or failing.

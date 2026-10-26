@@ -1,12 +1,12 @@
-name: CR Agent (FRD email -> branch per CR)
+name: CR Agent (FRD email -> CR branches in backend + frontend)
 
 on:
-  # Instant trigger from Power Automate when the FRD email arrives (see README)
+  # Instant trigger: Power Automate calls this after saving the FRD mail into the frd-inbox branch
   repository_dispatch:
     types: [frd-mail]
-  # Fallback: poll every 30 min, Mon-Sat 08:30-21:00 IST (03:00-15:30 UTC)
+  # Safety net: check the frd-inbox branch every hour, Mon-Sat 08:30-21:30 IST
   schedule:
-    - cron: "*/30 3-15 * * 1-6"
+    - cron: "0 3-16 * * 1-6"
   # Manual run from the Actions tab
   workflow_dispatch:
     inputs:
@@ -24,23 +24,17 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the agent repo (holds frd-inbox)
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use a PAT/GitHub App token instead if you want CI to run on the pushed CR branches
-          # (pushes made with the default GITHUB_TOKEN do not trigger other workflows).
-          token: ${{ secrets.CR_AGENT_GH_TOKEN || github.token }}
-
-      # The agent checks out other branches, so run it from a copy outside the work tree
-      - name: Stage agent
-        run: cp -r tools/cr-agent "$RUNNER_TEMP/cr-agent"
 
       - uses: actions/setup-python@v5
         with:
@@ -50,41 +44,55 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install tools
+      # ---- Toolchains so Claude can build and test both repos. Adjust versions to match your projects.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # TODO: add anything else your builds need (private Maven/npm registry credentials, Angular CLI, etc.)
+
+      - name: Install agent tools
         run: |
           sudo apt-get update -y && sudo apt-get install -y pandoc
-          pip install -r "$RUNNER_TEMP/cr-agent/requirements.txt"
+          pip install -r tools/cr-agent/requirements.txt
           npm install -g @anthropic-ai/claude-code
-
-      # TODO: install the INSURE 2.0 toolchain so Claude can build and run tests,
-      # e.g. setup-java + maven cache, or `npm ci` for the frontend.
-
-      - name: Git identity
-        run: |
-          git config user.name  "cr-agent[bot]"
-          git config user.email "cr-agent@users.noreply.github.com"
 
       - name: Run CR agent
         env:
+          # Claude access: set ONE of these two secrets.
+          #   CLAUDE_CODE_OAUTH_TOKEN = your Claude Team seat (create with `claude setup-token`)
+          #   ANTHROPIC_API_KEY       = pay-per-use Console API key
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MS_TENANT_ID:      ${{ secrets.MS_TENANT_ID }}
-          MS_CLIENT_ID:      ${{ secrets.MS_CLIENT_ID }}
-          MS_CLIENT_SECRET:  ${{ secrets.MS_CLIENT_SECRET }}
-          MAILBOX:           ${{ vars.CR_AGENT_MAILBOX || 'shubham.kumar@lumiq.ai' }}
-          SENDER_FILTER:     ${{ vars.CR_AGENT_SENDERS || 'dinesh.mehta@canarahsbclife.in' }}
-          BASE_BRANCH:       ${{ vars.CR_AGENT_BASE_BRANCH || 'insure/develop' }}
-          TEST_COMMAND:      ${{ vars.CR_AGENT_TEST_COMMAND }}
-          CLAUDE_MODEL:      ${{ vars.CR_AGENT_MODEL }}
-          REPO_DIR:          ${{ github.workspace }}
-          DRY_RUN:           ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
-          ONLY_CR:           ${{ inputs.only_cr }}
-        run: python "$RUNNER_TEMP/cr-agent/main.py"
+          # Token that can push to the backend and frontend repos (Contents: Read and write)
+          GH_TOKEN: ${{ secrets.CR_AGENT_GH_TOKEN }}
+          # Product repos: name=owner/repo@base-branch, comma-separated
+          REPOS: ${{ vars.CR_AGENT_REPOS }}
+          TEST_COMMAND_BACKEND: ${{ vars.CR_AGENT_TEST_BACKEND }}
+          TEST_COMMAND_FRONTEND: ${{ vars.CR_AGENT_TEST_FRONTEND }}
+          SENDER_FILTER: ${{ vars.CR_AGENT_SENDERS }}   # empty = any sender; subject must be INSURE 2.0 Phase -2 FRDS
+          CLAUDE_MODEL: ${{ vars.CR_AGENT_MODEL }}
+          MAIL_SOURCE: git
+          INBOX_BRANCH: frd-inbox
+          AGENT_REPO_DIR: ${{ github.workspace }}
+          WORKSPACE_DIR: ${{ runner.temp }}/workspace
+          # Test switches: repo variables also apply to automatic runs
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || vars.CR_AGENT_DRY_RUN || 'false' }}
+          ONLY_CR: ${{ inputs.only_cr || vars.CR_AGENT_ONLY_CR }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then unset CLAUDE_CODE_OAUTH_TOKEN; fi
+          if [ -z "$ANTHROPIC_API_KEY" ]; then unset ANTHROPIC_API_KEY; fi
+          if [ -z "$GH_TOKEN" ]; then echo "::error::Secret CR_AGENT_GH_TOKEN is missing"; exit 1; fi
+          if [ -z "$REPOS" ]; then echo "::error::Variable CR_AGENT_REPOS is missing"; exit 1; fi
+          python tools/cr-agent/main.py
 
-      - name: Upload Claude logs
+      - name: Upload Claude logs and plans
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cr-agent-logs
-          path: ${{ github.workspace }}/.cr-agent/**/claude-*.log
+          path: |
+            ${{ runner.temp }}/workspace/.cr-agent/**/claude-*.log
+            ${{ runner.temp }}/workspace/cr-docs/**
           if-no-files-found: ignore
           retention-days: 14
