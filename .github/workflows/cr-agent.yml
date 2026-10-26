@@ -45,10 +45,6 @@ jobs:
           node-version: "20"
 
       # ---- Toolchains so Claude can build and test both repos. Adjust versions to match your projects.
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
       # TODO: add anything else your builds need (private Maven/npm registry credentials, Angular CLI, etc.)
 
       - name: Install agent tools
