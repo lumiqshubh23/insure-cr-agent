@@ -16,8 +16,9 @@ Intake warnings:
 $warnings
 
 ## Rules
-- Implement every REQ in the plan, in whichever repo it belongs. Build the backend side of the API contract first, then the frontend against it, so field names, types, validations and messages match exactly.
-- Touch only the repos and files the CR needs. Do not refactor or reformat unrelated code.
+- The plan's first line `SCOPE: ...` lists the only repo folders you may change. Changes in any other repo folder are discarded automatically. If you find the scope is wrong, do not work around it: record it in the notes as the first open question.
+- Implement every REQ in the plan, in its repo. For a frontend-only CR, change only the frontend (often configuration, following the repo's existing pattern); do not add backend code. When both repos are in scope, build the backend side of the API contract first, then the frontend against it, so field names, types, validations and messages match exactly.
+- Touch only the files the CR needs. Do not refactor or reformat unrelated code.
 - Add or update automated tests in each repo you change, following that repo's existing test setup.
 - Run the build and tests for each repo you changed:
 $test_cmds

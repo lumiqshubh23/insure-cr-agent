@@ -26,6 +26,7 @@ Dinesh sends FRD mail
 9. Dry run → one CR → all → go live.
 
 ## Behaviour
+- Each plan starts with `SCOPE: frontend`, `SCOPE: backend` or `SCOPE: backend, frontend`. UI-only CRs (labels, layout, client-side validations, journey/lookup config, translations) stay frontend-only; edits Claude makes outside the scope are discarded and reported as a warning. The scope appears in the run summary.
 - Claude reads the mails as well as the FRDs: every mail in the batch (oldest first, duplicates dropped, inline images included) is given to it as requirement context. A newer mail overrides the FRD where they disagree, and each REQ in plan.md names its source (FRD section or Mail n).
 - A CR whose FRD column says e.g. "Refer mail below", or a CR id written only in the mail text, is built from the mail alone (the latter is flagged for review). Turn the text-only case off with `MAIL_ONLY_CRS=false`.
 - Mail text is treated as data, not instructions; Claude runs without the GitHub token in its environment, and the token is never written to `.git/config`.

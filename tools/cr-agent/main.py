@@ -18,6 +18,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -263,10 +264,25 @@ def process_cr(cr: CR, files: dict, inbox, attachments: dict, mails: list) -> st
             print(f"!! plan pass modified {r.name}; reverting")
             reset_repo(r)
 
+    # SCOPE line decided by the plan pass, e.g. "SCOPE: frontend" for a UI-only CR
+    scope = None
+    m = re.search(r"^\s*SCOPE:\s*(.+)$", (ws / plan_rel).read_text(), re.I | re.M)
+    if m:
+        names = {n.strip().strip("`").lower() for n in m.group(1).split(",")}
+        scope = [r for r in CFG["repos"] if r.name.lower() in names] or None
+    if not scope:
+        cr.warnings.append("plan.md has no valid SCOPE line; every repo was allowed to change. Check the scope in review.")
+
     res = run_claude(render("implement.md", **values), CFG["impl_turns"], work / "claude-impl.log")
 
+    if scope:
+        for r in CFG["repos"]:
+            if r not in scope and has_changes(r):   # out-of-scope edits are discarded, never pushed
+                cr.warnings.append(f"Changes in {r.name} were discarded: the plan's scope is {', '.join(x.name for x in scope)}.")
+                reset_repo(r)
+
     changed = [r for r in CFG["repos"] if has_changes(r)]
-    targets = changed or CFG["repos"][:1]            # nothing changed -> keep the plan in the first repo
+    targets = changed or (scope or CFG["repos"])[:1]   # nothing changed -> keep the plan in the first in-scope repo
     for r in targets:
         dst = r.path / "docs" / "cr" / branch
         dst.mkdir(parents=True, exist_ok=True)
@@ -283,7 +299,8 @@ def process_cr(cr: CR, files: dict, inbox, attachments: dict, mails: list) -> st
                + (f"\nCompanion changes on branch {branch} in: {', '.join(others)}" if others else ""), cwd=r.path)
         git("push", "-u", "origin", branch, cwd=r.path)
 
-    status = ("code in " + " + ".join(r.name for r in changed)) if changed else "plan only (no code changes)"
+    scope_txt = f"scope {', '.join(r.name for r in scope)}; " if scope else "scope not set; "
+    status = scope_txt + (("code in " + " + ".join(r.name for r in changed)) if changed else "plan only (no code changes)")
     if res.get("is_error"):
         status += "; implementation pass ended with an error, see notes/logs"
     cost = res.get("total_cost_usd")

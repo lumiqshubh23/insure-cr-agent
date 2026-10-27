@@ -27,16 +27,22 @@ $warnings
 ## What to do
 1. Read the FRD(s) and the mails completely: tables, field lists, validation rules, error messages, screenshots.
 2. Read `CLAUDE.md` here and in every repo folder, then explore each repo to find exactly where this change belongs.
-3. Write the plan to `$plan_path` with these sections:
+3. Decide the SCOPE: which repo folders this CR really needs. Use the smallest set:
+   - **Frontend only** when the change is about what the user sees or enters and the backend already provides the data: labels, text, layout, field order or visibility, screen states, client-side validations (regex, min/max, date limits), dropdown values or master data held in frontend config, translations. Many such changes are configuration (for example journey or lookup JSON files): follow the repo's existing pattern.
+   - **Backend only** when nothing on screen changes: server-side rules, persistence, integrations, workflow or background tasks, API behaviour the UI already handles.
+   - **Both** only when the frontend needs data, fields or endpoints the backend does not provide yet, or the same rule must be enforced on both sides.
+   Do not add backend work to a UI change "for completeness", and do not touch a repo just to add docs.
+4. Write the plan to `$plan_path`. Its FIRST line must be exactly `SCOPE: <repo folder names, comma-separated>` (for example `SCOPE: frontend` or `SCOPE: backend, frontend`), followed by these sections:
+   - **Scope decision**: one or two sentences on why each repo folder is in or out of scope.
    - **Requirement summary**: what the business wants, in your own words.
    - **Requirement checklist**: every functional requirement, validation and business rule as REQ-1, REQ-2, ... with its source (FRD section, or Mail n), and which repo(s) implement it. This is the contract for the implementation pass.
-   - **Impact per repo**: one subsection per repo folder listing concrete files/classes/components/tables and what changes. Write "No changes" for a repo that is untouched.
-   - **API contract**: every new or changed endpoint between frontend and backend: method, path, request and response fields with types, validation rules, error codes and messages. Backend and frontend must both follow this exactly. Write "No API changes" if none.
+   - **Impact per repo**: one subsection per in-scope repo folder listing concrete files/classes/components/config and what changes. List out-of-scope repos as "No changes".
+   - **API contract** (only when both repos are in scope): every new or changed endpoint between frontend and backend: method, path, request and response fields with types, validation rules, error codes and messages. Backend and frontend must both follow this exactly. Write "No API changes" if none.
    - **Data and config changes**: migrations, master data, rate tables, bank/channel config, feature flags.
-   - **Implementation steps**: ordered; backend contract first, then frontend.
+   - **Implementation steps**: ordered; when both repos are in scope, backend contract first, then frontend.
    - **Test plan**: tests per repo mapped to REQ ids, plus end-to-end manual QA scenarios including edge cases.
    - **Open questions / ambiguities**: anything unclear or contradictory in the FRD, with the assumption you recommend.
    - **Out of scope / dependencies**: other CRs, other teams, third-party integrations, BTG/UAT dependencies.
-4. Write only `$plan_path`. Do not modify anything inside the repo folders. Do not run git commands.
+5. Write only `$plan_path`. Do not modify anything inside the repo folders. Do not run git commands.
 
 Finish with a 3-line summary of the plan.
