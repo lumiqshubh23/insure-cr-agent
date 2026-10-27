@@ -14,6 +14,8 @@ Product repos are configured with REPOS, e.g.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -25,7 +27,7 @@ from string import Template
 
 from gitinbox import GitInbox
 from graph import Graph
-from parse import CR, branch_name, match_files, merge, parse_cr_tables
+from parse import CR, branch_name, crs_only_in_text, mail_text, match_files, merge, norm, parse_cr_tables
 
 HERE = Path(__file__).resolve().parent
 
@@ -80,17 +82,28 @@ CFG = {
 
 
 # ---------------------------------------------------------------- git helpers
+def _auth_b64() -> str:
+    return base64.b64encode(f"x-access-token:{CFG['gh_token']}".encode()).decode() if CFG["gh_token"] else ""
+
+
 def sh(*args: str, cwd: Path, check=True, capture=False) -> subprocess.CompletedProcess:
-    tok = CFG["gh_token"]
-    print(f"$ ({cwd.name}) " + " ".join(a.replace(tok, "***") if tok else a for a in args), flush=True)
+    secrets = [x for x in (CFG["gh_token"], _auth_b64()) if x]
+    shown = " ".join(args)
+    for x in secrets:
+        shown = shown.replace(x, "***")
+    print(f"$ ({cwd.name}) {shown}", flush=True)
     return subprocess.run(args, cwd=cwd, check=check, text=True, capture_output=capture)
+
+
+def git(*args: str, cwd: Path, check=True, capture=False) -> subprocess.CompletedProcess:
+    """git with the GitHub token passed per command, so it is never written to .git/config where Claude could read it."""
+    auth = ["-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {_auth_b64()}"] if CFG["gh_token"] else []
+    return sh("git", *auth, *args, cwd=cwd, check=check, capture=capture)
 
 
 def clone_url(slug: str) -> str:
     if slug.startswith(("/", ".", "http", "git@", "file:")):
         return slug
-    if CFG["gh_token"]:
-        return f"https://x-access-token:{CFG['gh_token']}@github.com/{slug}.git"
     return f"https://github.com/{slug}.git"
 
 
@@ -99,7 +112,7 @@ def prepare_workspace() -> None:
     for r in CFG["repos"]:
         r.path = CFG["workspace"] / r.name
         if not (r.path / ".git").exists():
-            sh("git", "clone", "--no-tags", clone_url(r.slug), r.name, cwd=CFG["workspace"])
+            git("clone", "--no-tags", clone_url(r.slug), r.name, cwd=CFG["workspace"])
         sh("git", "config", "user.name", env("GIT_USER_NAME", "cr-agent[bot]"), cwd=r.path)
         sh("git", "config", "user.email", env("GIT_USER_EMAIL", "cr-agent@users.noreply.github.com"), cwd=r.path)
     # Workspace map for Claude (the workspace folder itself is not a git repo)
@@ -112,7 +125,7 @@ def prepare_workspace() -> None:
 
 
 def remote_branch_exists(repo: Repo, branch: str) -> bool:
-    return bool(sh("git", "ls-remote", "--heads", "origin", branch, cwd=repo.path, capture=True).stdout.strip())
+    return bool(git("ls-remote", "--heads", "origin", branch, cwd=repo.path, capture=True).stdout.strip())
 
 
 def has_changes(repo: Repo) -> bool:
@@ -144,7 +157,9 @@ def run_claude(prompt: str, max_turns: str, log: Path) -> dict:
     if CFG["model"]:
         cmd += ["--model", CFG["model"]]
     print(f"$ claude -p <prompt> --max-turns {max_turns}", flush=True)
-    r = subprocess.run(cmd, cwd=CFG["workspace"], text=True, capture_output=True, timeout=4 * 3600)
+    claude_env = {k: v for k, v in os.environ.items()
+                  if k not in ("GH_TOKEN", "GITHUB_TOKEN", "MS_CLIENT_SECRET", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")}
+    r = subprocess.run(cmd, cwd=CFG["workspace"], text=True, capture_output=True, timeout=4 * 3600, env=claude_env)
     log.write_text(f"--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}\n")
     try:
         result = json.loads(r.stdout)
@@ -155,12 +170,54 @@ def run_claude(prompt: str, max_turns: str, log: Path) -> dict:
     return result
 
 
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+
+
+def build_mail_context(mails: list, inbox, out_dir: Path) -> list[Path]:
+    """Write every FRD mail (oldest first, duplicates dropped) as Markdown, plus the images attached to it."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths, seen = [], set()
+    for msg, atts in mails:
+        text = mail_text(msg.html)
+        digest = hashlib.sha1(" ".join(text.split()).encode()).hexdigest()
+        if not text.strip() or digest in seen:
+            continue
+        seen.add(digest)
+        n = len(paths) + 1
+        src = out_dir / f"{n:02d}.html"
+        src.write_text(msg.html or "")
+        try:
+            body = subprocess.run(["pandoc", "-f", "html", "-t", "gfm", "--wrap=none", str(src)],
+                                  check=True, text=True, capture_output=True).stdout
+        except subprocess.CalledProcessError:
+            body = text
+        src.unlink()
+        imgs = []
+        for a in atts:
+            if a.name.lower().endswith(IMAGE_EXTS):
+                img_dir = out_dir / f"{n:02d}-images"
+                img_dir.mkdir(exist_ok=True)
+                dst = img_dir / a.name
+                if not dst.exists():
+                    inbox.download_attachment(a, str(dst))
+                    imgs.append(dst)
+        header = [f"# Mail {n}", "", f"- Subject: {msg.subject}", f"- From: {msg.sender}",
+                  f"- Received: {msg.received.isoformat()}"]
+        if imgs:
+            header.append("- Images attached to this mail (open them, they may show screens or tables): "
+                          + ", ".join(str(p.relative_to(CFG['workspace'])) for p in imgs))
+        p = out_dir / f"{n:02d}-mail.md"
+        p.write_text("\n".join(header) + "\n\n---\n\n" + body)
+        paths.append(p)
+    return paths
+
+
 def render(template_file: str, **values) -> str:
     return Template((HERE / "prompts" / template_file).read_text()).safe_substitute(**values)
 
 
 # ---------------------------------------------------------------- per-CR pipeline
-def process_cr(cr: CR, files: dict, inbox, attachments: dict) -> str:
+def process_cr(cr: CR, files: dict, inbox, attachments: dict, mails: list) -> str:
     branch = branch_name(cr.cr_id, CFG["prefix"])
     ws = CFG["workspace"]
     work = ws / ".cr-agent" / branch                # FRDs + logs (outside every repo)
@@ -171,7 +228,7 @@ def process_cr(cr: CR, files: dict, inbox, attachments: dict) -> str:
     docs.mkdir(parents=True)
 
     for r in CFG["repos"]:
-        sh("git", "fetch", "origin", r.base, cwd=r.path)
+        git("fetch", "origin", r.base, cwd=r.path)
         reset_repo(r)
         sh("git", "checkout", "-B", branch, f"origin/{r.base}", cwd=r.path)
 
@@ -180,11 +237,20 @@ def process_cr(cr: CR, files: dict, inbox, attachments: dict) -> str:
         src = Path(inbox.download_attachment(attachments[att_name], str(work / "src" / att_name)))
         frd_paths.append(convert_frd(src, work / "frd"))
 
+    mail_paths = build_mail_context(mails, inbox, work / "mail")
+    if not frd_paths and not mail_paths:
+        raise RuntimeError("No FRD and no mail text available for this CR")
+
     plan_rel, notes_rel = f"cr-docs/{branch}/plan.md", f"cr-docs/{branch}/implementation-notes.md"
     tests = "\n".join(f"- in `{n}/`: `{c}`" for n, c in CFG["test_cmds"].items()) or \
         "- (not configured: find each repo's build/test/lint commands in its CLAUDE.md, pom.xml, package.json, Makefile)"
     values = dict(cr_id=cr.cr_id, summary=cr.summary, frd_date=cr.frd_date, branch=branch,
-                  frd_files="\n".join(f"- {p.relative_to(ws)}" for p in frd_paths),
+                  frd_files="\n".join(f"- {p.relative_to(ws)}" for p in frd_paths)
+                  or "- (none: this CR is described in the mail text only)",
+                  mail_files="\n".join(f"- {p.relative_to(ws)}" for p in mail_paths) or "- (none)",
+                  source_note=("This CR has NO FRD document: the mails are the requirement. Read them carefully."
+                               if cr.mail_only and not frd_paths else
+                               "The FRD is the main specification; the mails add clarifications and changes."),
                   plan_path=plan_rel, notes_path=notes_rel, test_cmds=tests,
                   repo_list="\n".join(f"- `{r.name}/` ({r.slug}, cut from `{r.base}`)" for r in CFG["repos"]),
                   warnings="\n".join(f"- {w}" for w in cr.warnings) or "- none")
@@ -208,14 +274,14 @@ def process_cr(cr: CR, files: dict, inbox, attachments: dict) -> str:
             if (docs / f).exists():
                 shutil.copy(docs / f, dst / f)
         sh("git", "add", f"docs/cr/{branch}/plan.md", cwd=r.path)
-        sh("git", "commit", "-m", f"{cr.cr_id}: implementation plan from FRD [cr-agent]", cwd=r.path)
+        sh("git", "commit", "-m", f"{cr.cr_id}: implementation plan from FRD and mails [cr-agent]", cwd=r.path)
         if has_changes(r):
             others = [o.name for o in changed if o is not r]
             sh("git", "add", "-A", cwd=r.path)
             sh("git", "commit", "-m",
                f"{cr.cr_id}: {cr.summary[:60]}\n\nAI-generated from FRD by cr-agent. Needs developer review before merge."
                + (f"\nCompanion changes on branch {branch} in: {', '.join(others)}" if others else ""), cwd=r.path)
-        sh("git", "push", "-u", "origin", branch, cwd=r.path)
+        git("push", "-u", "origin", branch, cwd=r.path)
 
     status = ("code in " + " + ".join(r.name for r in changed)) if changed else "plan only (no code changes)"
     if res.get("is_error"):
@@ -242,11 +308,18 @@ def main() -> int:
     print(f"Found {len(msgs)} FRD email(s)")
     crs: dict[str, CR] = {}
     attachments: dict = {}
+    mails: list = []          # (message, its attachments), oldest first: given to Claude as requirement context
     for m in msgs:
         inbox.load_body(m)
         merge(crs, parse_cr_tables(m.html))
-        for a in inbox.list_attachments(m):
+        atts = inbox.list_attachments(m)
+        for a in atts:
             attachments[a.name] = a
+        mails.append((m, atts))
+    if env("MAIL_ONLY_CRS", "true").lower() == "true":   # CR ids written only in the mail text, not in any table
+        for m, _ in mails:
+            for c in crs_only_in_text(mail_text(m.html), crs):
+                crs[norm(c.cr_id)] = c
     print(f"Parsed {len(crs)} CR row(s); {len(attachments)} attachment(s)")
 
     report = []
@@ -262,13 +335,16 @@ def main() -> int:
         if existing:
             report.append((cr.cr_id, "skipped", f"branch '{branch}' already exists in {', '.join(existing)}")); continue
         files, missing = match_files(cr.files, list(attachments))
+        if cr.mail_only and not cr.files:
+            missing = []      # built from the mail text alone
         if missing:
             report.append((cr.cr_id, "waiting", "FRD not received yet: " + "; ".join(missing))); continue
         if dry:
+            src = (", ".join(files.values()) + " + mail text") if files else "mail text only"
             report.append((cr.cr_id, "would run", f"{branch} in {', '.join(r.name for r in CFG['repos'])} <- "
-                           + ", ".join(files.values()))); continue
+                           + src)); continue
         try:
-            report.append((cr.cr_id, "done", process_cr(cr, files, inbox, attachments)))
+            report.append((cr.cr_id, "done", process_cr(cr, files, inbox, attachments, mails)))
         except Exception as e:
             print(f"!! {cr.cr_id} failed: {e}", file=sys.stderr)
             report.append((cr.cr_id, "failed", str(e)[:300]))

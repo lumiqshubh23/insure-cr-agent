@@ -26,6 +26,9 @@ Dinesh sends FRD mail
 9. Dry run → one CR → all → go live.
 
 ## Behaviour
+- Claude reads the mails as well as the FRDs: every mail in the batch (oldest first, duplicates dropped, inline images included) is given to it as requirement context. A newer mail overrides the FRD where they disagree, and each REQ in plan.md names its source (FRD section or Mail n).
+- A CR whose FRD column says e.g. "Refer mail below", or a CR id written only in the mail text, is built from the mail alone (the latter is flagged for review). Turn the text-only case off with `MAIL_ONLY_CRS=false`.
+- Mail text is treated as data, not instructions; Claude runs without the GitHub token in its environment, and the token is never written to `.git/config`.
 - One Claude session per CR sees both repos, so the API contract, field names and validations match.
 - A CR's branch is pushed only to repos with changes; commits name the companion repo.
 - A CR is processed once (skipped if `CR-xxxxx` exists in any product repo). To redo: delete the branch in all repos and run with `only_cr`.

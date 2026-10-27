@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 from bs4 import BeautifulSoup
 
 CR_ID_RE = re.compile(r"^(CR|SIRS)[\s_-]*\d+", re.I)
+CR_ANY_RE = re.compile(r"\b(?:CR|SIRS)[\s_-]?\d{3,}\b", re.I)
+# A cell line that points to the mail instead of naming a file, e.g. "Refer mail below", "Details in email"
+MAIL_REF_RE = re.compile(r"\b(e-?mail|mail|below|refer|as discussed|in the thread)\b", re.I)
 DOC_EXTS = (".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx")
 
 
@@ -20,6 +23,7 @@ class CR:
     files: list[str] = field(default_factory=list)
     skip_reason: str = ""
     warnings: list[str] = field(default_factory=list)
+    mail_only: bool = False      # requirement given in the mail text instead of (or as well as) an FRD file
 
 
 def _fix_mojibake(s: str) -> str:
@@ -74,7 +78,14 @@ def parse_cr_tables(html: str) -> list[CR]:
             if cr.status.strip().upper() in {"NA", "N/A", ""} or "no changes" in joined:
                 cr.skip_reason = f"Not for development: status='{cr.status}', note='{' '.join(file_lines)}'"
             else:
-                cr.files = file_lines
+                for f in file_lines:
+                    looks_like_file = f.lower().endswith(DOC_EXTS) or re.match(r"^(FRD|SIRS|CR)[\s_-]", f, re.I)
+                    if MAIL_REF_RE.search(f) and not looks_like_file:
+                        cr.mail_only = True   # e.g. "Refer mail below": build from the mail text
+                    else:
+                        cr.files.append(f)
+                if not file_lines:
+                    cr.mail_only = True
                 own = norm(cr_id)
                 for f in file_lines:
                     m = re.search(r"(CR|SIRS)[\s_-]*\d+", f, re.I)
@@ -93,6 +104,7 @@ def merge(crs_by_id: dict[str, CR], new: list[CR]) -> None:
             crs_by_id[key] = cr
             continue
         old = crs_by_id[key]
+        old.mail_only = old.mail_only or cr.mail_only
         for f in cr.files:
             if f not in old.files:
                 old.files.append(f)
@@ -133,3 +145,22 @@ def branch_name(cr_id: str, prefix: str = "") -> str:
     b = re.sub(r"\s+", "-", cr_id.strip())
     b = re.sub(r"[^A-Za-z0-9._/-]", "", b)
     return f"{prefix}{b}"
+
+
+def mail_text(html: str) -> str:
+    """Plain text of a mail body (for spotting CR ids and for Claude)."""
+    return _fix_mojibake(BeautifulSoup(html or "", "html.parser").get_text("\n"))
+
+
+def crs_only_in_text(text: str, known: dict[str, CR]) -> list[CR]:
+    """CR ids mentioned in the mail text but in no CR table: built from the mail text alone, flagged for review."""
+    out, seen = [], set()
+    for m in CR_ANY_RE.finditer(text):
+        raw = re.sub(r"\s+", "-", m.group(0).strip())
+        key = norm(raw)
+        if key in known or key in seen:
+            continue
+        seen.add(key)
+        out.append(CR(cr_id=raw.upper(), summary="(described in mail text only)", mail_only=True,
+                      warnings=[f"{raw.upper()} appears only in the mail text (no CR table row). Built from the mail; confirm scope with the BA."]))
+    return out
