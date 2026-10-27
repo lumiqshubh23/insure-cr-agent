@@ -1,13 +1,12 @@
 name: CR Agent (FRD email -> CR branches in backend + frontend)
 
 on:
-  # Instant trigger: Power Automate calls this after saving the FRD mail into the frd-inbox branch
+  # Trigger automatically when Power Automate sends the frd-mail event
+  # after saving a new FRD email into the frd-inbox branch.
   repository_dispatch:
     types: [frd-mail]
-  # Safety net: check the frd-inbox branch every hour, Mon-Sat 08:30-21:30 IST
-  schedule:
-    - cron: "0 3-16 * * 1-6"
-  # Manual run from the Actions tab
+
+  # Allow manual execution from the GitHub Actions tab.
   workflow_dispatch:
     inputs:
       dry_run:
